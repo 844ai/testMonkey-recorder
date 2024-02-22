@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+	<title>脚本猿</title>
+	<meta charset="utf-8">
+	<link rel="stylesheet" href="quasar.css">
+	<script src="https://lib.baomitu.com/axios/0.21.1/axios.min.js"></script>
+	<script src="./query-string.min.js"></script>
+	<style>
+		body {
+			/*  height: 100vh;
+            background-color: #f0f0f0;*/
+		}
+
+		#screenCanvas {
+			background-color: white;
+			/*width: 100%;*/
+			max-height: 90vh;
+			object-fit: contain;
+			border: 1px solid #ccc;
+			box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+		}
+
+		#scriptArea {
+			padding: 10px;
+			background-color: #f0f0f0;
+			display: flex;
+			flex-direction: column;
+			height: 90vh;
+		}
+		#scriptArea textarea{
+			flex-grow: 1;
+			margin-top: 10px;
+		}
+
+		.scriptResult {
+			height: 500px;
+		}
+		.nodeInfoTxt {
+			height: 300px;
+		}
+		.elementsTxt{
+			height: 100% ;
+		}
+	</style>
+</head>
+
+<body>
+	<div class="q-pa-sm">
+		<div class="row">
+			<div class="bg-grey-6 col-4 flex justify-center">
+				<canvas id="screenCanvas"></canvas>
+			</div>
+			<div class="col-8" id="scriptArea">
+				<div class="row">
+					<div class="buttons q-pr-md">
+                                                                             <button onclick="requestPermission()">屏幕权限</button>
+                                                                             <button onclick="setScreenMetrics()">统一屏幕</button>
+                                                                             <button onclick="startRecording()">开始</button>
+                                                                             <button onclick="pauseRecording()">暂停</button>
+						<button onclick="resumeRecording()">恢复</button>
+                                                                            <button onclick="stopRecording()">停止</button>
+                                                                            <button onclick="doRunScripte()">运行脚本</button>
+
+					</div>
+					<div class="row q-gutter-x-sm">
+						<!-- colorClick 颜色值的演示区域，div 或span 正方形 -->
+						<!-- 添加按钮: 等待颜色，点击后再文本框中增加代码，格式  page.waitFor(()=> Device.pixel( postionClick.x , postionClick.y ) == colorClick ) -->
+
+						<button onclick="onPosCopy()">复制</button>
+						<div onclick="onPosCopy()" class="posLabel flex items-center justify-center ">坐标</div>
+						<div class="flex items-center justify-center ">颜色:</div>
+						<div class="colorDisplay" style="width: 50px; border: 1px solid black;"></div>						
+						<button onclick="addWaitForColorCode()">等待颜色</button>
+						<button onclick="getElements()">获取节点</button>
+
+					</div>
+				</div>
+				<textarea class="scriptResult" placeholder="脚本录制结果"></textarea>
+				<textarea class="nodeInfoTxt" placeholder="click nodeInfo"></textarea>
+				<textarea class="elementsTxt" placeholder="app elements"></textarea>
+			</div>
+		</div>
+	</div>
+
+	<!-- <script type="module" src="./vue.esm-browser.prod.js"></script>
+		<script type="module" src="./quasar.esm.js"></script>
+     -->
+	<script src="./vue.global.prod.js"></script>
+	<!-- <script src="./quasar.umd.js"></script> -->
+	<script type="module" src="quasar.esm.js"></script>
+	
+	<!-- <script type="module">
+		import { Quasar, Notify } from 'https://unpkg.com/quasar@latest/quasar.esm.browser.js'
+	  
+		console.log("Quasar", Quasar, Notify)
+		// 使用 Notify 显示通知
+		Notify.create({
+		  message: '测试消息',
+		  color: 'positive',
+		  position: 'top',
+		  timeout: 2500,
+		});
+    </script> -->
+	  
+	<script>
+		var mobileIp = queryString.parse(location.search).ip ;
+		if( !mobileIp ) alert("请在url中添加ip参数，例如：http://localhost:8080/index.html?ip=192.168.1.54")
+		const baseURL = `http://${mobileIp}:60844`;   // 67 
+		
+		const baseActionURL = `${baseURL}/TOOL_RECORDER`;
+		const canvas = document.getElementById('screenCanvas');
+		const ctx = canvas.getContext('2d');
+		let colorClick = "";
+		let postionClick = {};
+		let [ deviceMetricsWidth , deviceMetricsHeight ] = [ 0 , 0 ] ;
+		let deviceWidth , deviceHeight ;
+		let quality = 40 ;
+		let nodeInfo = {} ;   // 当前页面的节点；
+		let FPS_INTERVAL = 2000 ;
+		const ScreenMetrics = { width: 390, height: 844 }
+
+		// 使用quasar.notify 显示 "测试消息"
+		
+		async function fetchDeviceInfo() {
+			try {
+				const response = await axios.get(`${baseURL}/DEVICE_INFO`);
+				if (response.data.code === 0) {
+					const deviceInfo = response.data.data;
+					deviceWidth = deviceInfo.width;
+					deviceHeight = deviceInfo.height;
+					let canvasRatio = deviceWidth / deviceHeight;
+
+					// 将canvas的高度设置为屏幕高度的90%
+					let canvasHeight = window.innerHeight * 0.9;
+					canvas.height = canvasHeight;
+
+					// 根据设备的宽高比例计算canvas的宽度
+					let canvasWidth = canvasHeight * canvasRatio;
+					canvas.width = canvasWidth;
+					console.log("fetchDeviceInfo:", response.data, canvasWidth)
+				} else {
+					console.error('Error fetching device info:', response.data.message);
+				}
+			} catch (error) {
+				// console.error('Error making request:', error);
+			}
+		}
+
+
+		canvas.addEventListener('click', function (event) {
+			const rect = canvas.getBoundingClientRect();
+			// 基于canvas尺寸和屏幕尺寸计算缩放比例
+			let scaleX = ScreenMetrics ? ScreenMetrics.width / canvas.width : canvas.width / rect.width;
+			let scaleY = ScreenMetrics ? ScreenMetrics.height / canvas.height : canvas.height / rect.height;
+			// 计算点击位置在设备上的坐标
+			let x = (event.clientX - rect.left) * scaleX;
+			let y = (event.clientY - rect.top) * scaleY;
+			x = parseInt(x);
+			y = parseInt(y);
+			console.log(`page.tap(${x}, ${y})`);
+
+			// 使用未缩放的坐标获取颜色
+			let canvasX = (event.clientX - rect.left);
+			let canvasY = (event.clientY - rect.top);
+			canvasX = parseInt(canvasX);
+			canvasY = parseInt(canvasY);
+
+			// 获取点击位置的像素数据
+			const pixel = ctx.getImageData(canvasX, canvasY, 1, 1).data;
+			const rgb = `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
+			// 将RGB转换为16进制格式
+			const rgbHex = "#" + ((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1);
+			console.log(`Color at (${canvasX}, ${canvasY}): ${rgbHex} ${rgb}`);
+			colorClick = rgbHex;
+			const colorDisplay = document.querySelector('.colorDisplay');
+			colorDisplay.style.backgroundColor = rgbHex;
+
+			let mobileMetricsX = parseInt(canvasX * scaleX);
+			let moobileMetricsY = parseInt(canvasY * scaleY) ;
+			positionClick = { x: mobileMetricsX, y: moobileMetricsY };
+			document.querySelector(".posLabel").innerText = `(${mobileMetricsX}, ${moobileMetricsY})`;
+			// 打印点击位置的像素数据，边距：上下左右
+			let ClickInfo = { x: mobileMetricsX, y: moobileMetricsY };
+			if(ScreenMetrics) ClickInfo = { x: mobileMetricsX, y: moobileMetricsY, right: ScreenMetrics.width - mobileMetricsX, bottom: ScreenMetrics.height - moobileMetricsY };
+			console.log("点击位置的像素数据：", ClickInfo );
+
+			// 通过canvasX，canvasY 计算 设备的原始宽高的坐标deviceX,deviceY，可以增加scaleX, scaleY方法；
+			// 通过deviceX,deviceY在nodeinfo 和children[] 中获取点击坐标在该元素区域的节点信息；保持原有的结构。
+			// 使用设备的真实宽高计算缩放比例
+			    let scaleXDevice = deviceWidth / canvas.width;
+			    let scaleYDevice = deviceHeight / canvas.height;
+
+			    // 根据缩放比例计算点击位置在设备上的坐标
+			    let deviceX = canvasX * scaleXDevice;
+			    let deviceY = canvasY * scaleYDevice;
+
+			    // 过滤出点击区域内的节点
+			    let filteredNodeInfo = filterNodesByClick(nodeInfo, deviceX, deviceY);
+
+			let keyData = extractKeyData(filteredNodeInfo);
+			let formattedData = formatDataAsHTML(keyData);			
+			document.querySelector(".nodeInfoTxt").textContent = formattedData || '';
+
+			    if (filteredNodeInfo) {
+			        console.log("Filtered node info:"  );
+			        // 可以在此处处理过滤后的节点
+			    } else {
+			        console.log("No nodes found in the clicked area");
+			    }
+
+		});
+		function extractKeyData(node) {
+		    let keyData = {
+		        id: node.id || null,
+		        className: node.className,
+		        isEditable: node.isEditable,
+		        isEnable: node.isEnable,
+		        clickable: node.clickable,
+		        boundsInScreen: node.boundsInScreen,
+		        text: node.text,
+		        children: []
+		    };
+
+		    if (node.children) {
+		        keyData.children = node.children.map(child => extractKeyData(child));
+		    }
+
+		    return keyData;
+		}
+		
+		function formatDataAsHTML(node, indent = 0, showBoundsInScreen = false) {
+		    let indentSpace = ' '.repeat(indent);
+		    let childElements = '';
+
+		    // 如果节点有子节点，递归地调用此函数来格式化它们
+		    if (node.children && node.children.length > 0) {
+		        childElements = node.children.map(child => formatDataAsHTML(child, indent + 4, showBoundsInScreen)).join('');
+		    }
+
+		    // 构建HTML属性字符串
+		    let attributes = [];
+		    if (node.id) attributes.push(`id="${node.id}"`);
+		    if (node.className) attributes.push(`class="${node.className}"`);
+		    if (node.isEditable) attributes.push(`isEditable="${node.isEditable}"`);
+		    if (node.isEnable) attributes.push(`isEnable="${node.isEnable}"`);
+		    if (node.clickable) attributes.push(`clickable="${node.clickable}"`);
+		    if (node.text) attributes.push(`text="${node.text}"`);
+		    if (showBoundsInScreen && node.boundsInScreen) {
+		        attributes.push(`boundsInScreen="left: ${node.boundsInScreen.left}, top: ${node.boundsInScreen.top}, right: ${node.boundsInScreen.right}, bottom: ${node.boundsInScreen.bottom}"`);
+		    }
+
+		    // 生成并返回当前节点的HTML表示
+		    return `${indentSpace}<div ${attributes.join(' ')}>\n${childElements}${indentSpace}</div>\n`;
+		}
+
+
+		function addWaitForColorCode() {
+			const scriptArea = document.querySelector('.scriptResult');
+			const waitCode = `await page.waitFor(()=> Screen.pixel(${positionClick.x}, ${positionClick.y}) == '${colorClick}');`;
+			scriptArea.value += waitCode + '\n';
+		}
+
+		let image = new Image();
+		let isRequestPending = false;
+
+		async function fetchAndDisplayImage() {
+			  if (isRequestPending) {
+			    console.log('A request is already in progress. Exiting.');
+			    return;
+			  }
+			try {
+				isRequestPending = true;
+				const res = await axios.get(`${baseURL}/SCREENSHOT_APP` , { params: { width: ScreenMetrics.width , height: ScreenMetrics.height , quality  } } ).then(r=>r.data)
+				isRequestPending = false ;
+				if (res.code === 0) {
+					image.onload = () => {
+						ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+					};
+					image.src = res.data;
+				} else {
+					console.error('Error fetching image:', responseData.message);
+				}
+			} catch (error) {
+				isRequestPending = false ;
+				console.error('Error making request:', error);
+			}
+		}
+
+		async function startRecording() {
+			const res = await axios.get(`${baseActionURL}?action=start`).then(r => r.data);
+			console.log("Recording started", res);
+			document.querySelector(".scriptResult").value = "";
+                                      [ deviceMetricsWidth , deviceMetricsHeight ] = res.data.split(";").map(i=> parseInt(i)) ;
+		}
+
+		async function stopRecording() {
+			const res = await axios.get(`${baseActionURL}?action=stop`).then(r => r.data);
+			console.log("Recording stopped", res);
+			let actions = res.data;
+			let scripts = trans2script(actions)
+                                       let scriptScreen = `// Screen.setMetrics( ${ deviceMetricsWidth || deviceWidth } , ${ deviceMetricsHeight || deviceHeight }); // 当使用page.tap(x,y)时，Screen.setMetrics可以确保不同宽高的屏幕运行正常 \n\n`
+			document.querySelector(".scriptResult").value = scriptScreen + scripts;
+		}
+
+		async function pauseRecording() {
+			const res = await axios.get(`${baseActionURL}?action=pause`).then(r => r.data);
+			console.log("Recording paused", res);
+
+		}
+
+		async function resumeRecording() {
+			const res = await axios.get(`${baseActionURL}?action=resume`).then(r => r.data);
+			console.log("Recording resumed", res);
+		}
+
+                          async function requestPermission(){                                                
+                                const res = await axios.get(`${baseURL}/PERMISSION_SCREEN`).then(r => r.data);
+                                console.log("requestPermission: ", res);
+                          }
+                          async function setScreenMetrics(){                                                
+                                const res = await axios.get(`${baseURL}/SCREEN_METRICS` , {params: { width: ScreenMetrics.width , height: ScreenMetrics.height }} ).then(r => r.data);
+                                console.log("setScreenMetrics: ", res);
+                          }
+                          async function doRunScripte(){                                                
+                                let script = document.querySelector(".scriptResult").value ;
+                                let [ configLine ] = script.trim().split("\n");
+                                let [ , jsonConfig] = configLine.split(/config\s*=/);
+                                let type = jsonConfig ? jsonConfig.type : "app" ;
+                                script = wrapAsync(script) ;
+                                const res = await axios.post(`${baseURL}/SCRIPT_RUN` , {  script , type  } ).then(r => r.data);
+                                console.log("setScreenMetrics: ", res);
+                          }
+
+                          async function getElements(){                                  
+                                const res = await axios.get(`${baseURL}/UISELECTOR_ELEMENTS`).then(r => r.data);
+                               let text = JSON.stringify(res.data , null , 2)
+			document.querySelector(".elementsTxt").value = text ;
+			nodeInfo = res.data ;
+                           }
+                           async function onPosCopy(){
+                           	let textElement = document.querySelector(".posLabel");                           	
+		        	let text = textElement.textContent || textElement.innerText;
+		            // 创建一个临时的 textarea 元素用于复制
+			    let textarea = document.createElement("textarea");
+			    textarea.value = text;
+			    document.body.appendChild(textarea);
+			    
+			    // 选中并复制文本
+			    textarea.select();
+			    textarea.setSelectionRange(0, 99999); // 兼容性: 移动设备
+
+			    try {
+			        let successful = document.execCommand('copy');
+			        let msg = successful ? 'successful' : 'unsuccessful';
+			        console.log('Copy text command was ' + msg);
+			    } catch (err) {
+			        console.error('Oops, unable to copy', err);
+			    }
+
+			    // 移除临时创建的 textarea
+			    document.body.removeChild(textarea);
+                           }
+
+		/**
+		 * 获取检点的选择器
+		 * 优化逻辑，如果把 没有找到id，则继续寻找父节点，直到找到id。就像是html中的选择器一样。把#id+空格放到前面。如#messages .item
+		 */
+		function trans2script(actions) {
+			let sb = "";
+			const actionItems = actions.trim().split("\n").filter(item => item !== '');
+
+			let previousActionItem = null;
+			for (const actionItem of actionItems) {
+				// Skip if the current item is identical to the previous one
+				if (actionItem === previousActionItem) {
+					continue;
+				}
+
+				try {
+					const json = JSON.parse(actionItem);
+					const action = json.action;
+					let selector = json.selector;
+					const bounds = json.bounds;
+					const x = parseInt(bounds.x);
+					const y = parseInt(bounds.y);
+					const width = parseInt(bounds.width);
+					const height = parseInt(bounds.height);
+					let content = json.content || "";
+					let centerX = parseInt(x + width/2) ;
+					let centerY = parseInt(y + height/2) ;
+					let ext = JSON.parse(json.ext || "{}") ;
+					let extStr = "" ;
+					const ActionEnd = "await sleep(500); \n\n" ;
+					console.log('selector:',selector)
+					if(selector ) selector = selector.replace(/#[^\/]*:id\//, '#');
+
+					switch (action) {
+						case "click":
+							if(ext.text) extStr = `// await page.click("=${ext.text}")  await page.tapText("=${ext.text}")`
+							if(ext.desc) extStr += `// ${ext.desc.substr(0,10)}`
+							if (selector.startsWith("#") || selector.startsWith("=")) {
+								// 需要正则删除字符中的多余内容，"#com.tencent.mm:id/jv6" 改为 "#jv6",
+								sb += `// await page.tap(${centerX},${centerY}, { left: ${x} , top: ${y} , width:${width},height:${height} } );\n`;
+								sb += `await page.waitFor('${selector}');\n`;
+								sb += `await page.click('${selector}'); ${extStr}\n`;
+								sb += ActionEnd ;
+							} else {
+								sb += `await page.tap(${centerX},${centerY}, { left: ${x} , top: ${y} , width:${width}, height:${height} } );\n`;
+								sb += `// await page.waitFor('${selector}');\n`;
+								sb += `// await page.click('${selector}'); ${extStr}\n`;
+								sb += ActionEnd ;
+							}
+							break;
+						case "input":
+							if(ext.text) extStr = `// await page.type('=${ext.text}', "${content}")`
+							if(ext.desc) extStr += `// ${ext.desc.substr(0,10)}`
+							sb += `await page.waitFor('${selector}'); \n`;
+							sb += `await page.type('${selector}' , "${content}");\n`;
+							sb += ActionEnd ;
+							break;
+						case "unknown":
+							// sb += `// Unknown action selector: ${selector}\n`;
+							break;
+						// Add more cases as needed
+					}
+				} catch (e) {
+					sb += `// Error parsing action item: ${actionItem}\n`;
+					console.error("Error parsing action item: ", e , actionItem)
+				}
+
+				previousActionItem = actionItem;
+			}
+			return sb;
+		}
+                        function wrapAsync(code) {
+                            // 检查代码中是否已经有 'async' 关键字
+                            const hasAsync = /async\s+function/.test(code);
+                            let tryCode = `
+                                	       try{
+                                	             ${code}
+			       }catch(e){
+        				console.log('script run error:' ,e)        
+
+				Console.open()
+				Console.show()
+				Console.error("错误:", e )
+				Console.hide( 10000 );
+			       }` ;
+                            // 如果代码包含 'await' 但不包含 'async'
+                            if (!hasAsync && /await/.test(code)) {                            
+                                // 将代码包装在一个立即执行的异步函数表达式中
+                                let newColde = `
+                                	(async function() {
+                                		${tryCode}
+                                	})()
+                                ` ;
+                                return newColde;
+                            }
+
+                            // 如果代码已经是 async 或者不需要修改，则原样返回
+                            return tryCode;
+                        }
+                        function filterNodesByClick(node, clickX, clickY) {
+		    let newNode = Object.assign({}, node); // 复制原始节点，避免直接修改原始数据
+		    newNode.children = [];
+
+		    // 检查当前节点是否在点击范围内
+		    let bounds = node.boundsInScreen;
+		    if (clickX >= bounds.left && clickX <= bounds.right &&
+		        clickY >= bounds.top && clickY <= bounds.bottom) {
+		        // 如果子节点也在点击范围内，递归添加
+		        if (node.children) {
+		            for (let child of node.children) {
+		                let filteredChild = filterNodesByClick(child, clickX, clickY);
+		                if (filteredChild) {
+		                    newNode.children.push(filteredChild);
+		                }
+		            }
+		        }
+		        return newNode;
+		    }
+
+		    // 如果子节点在点击范围内，但当前节点不在，递归检查子节点
+		    if (node.children) {
+		        for (let child of node.children) {
+		            let filteredChild = filterNodesByClick(child, clickX, clickY);
+		            if (filteredChild) {
+		                newNode.children.push(filteredChild);
+		            }
+		        }
+		        if (newNode.children.length > 0) {
+		            return newNode;
+		        }
+		    }
+
+		    return null; // 如果当前节点和子节点都不在点击范围内，返回null
+		}
+
+
+		// 初始化设备信息和canvas尺寸
+		fetchDeviceInfo();
+
+		// 设置定时器，例如每1秒请求一次
+		setInterval(fetchAndDisplayImage, FPS_INTERVAL);
+		fetchAndDisplayImage()
+
+
+	</script>
+</body>
+
+</html>
